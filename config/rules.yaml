@@ -1,0 +1,22 @@
+# All thresholds live here. Changing a rule never needs a code change.
+rules_version: v1
+
+window_minutes: 60      # velocity looks at the last 60 minutes
+baseline_window: 50     # amount baseline uses the last 50 earlier transactions
+min_history: 5          # amount rule needs at least 5 earlier transactions
+
+rules:
+  VELOCITY:
+    threshold: 5        # fires at 5 or more transactions in the window
+    points: 40
+  UNUSUAL_AMOUNT:
+    threshold: 3.5      # fires when robust z-score is above this
+    points: 30
+  IMPOSSIBLE_TRAVEL:
+    speed_kmh: 800      # fires when implied speed is above this
+    min_distance_km: 50 # ...and the cities are at least this far apart
+    points: 40
+
+bands:
+  medium: 30            # score 30 to 59 is MEDIUM
+  high: 60              # score 60 and above is HIGH
