@@ -10,9 +10,11 @@ flowchart LR
     end
 
     subgraph STORE["2. Load and clean"]
+        I["Ingest<br/>skip file if hash already loaded"]
         C[("Raw table<br/>data as it arrived")]
         D[("Clean table")]
         Q[("Quarantine table<br/>bad rows + reason")]
+        I --> C
         C --> D
         C --> Q
     end
@@ -33,7 +35,7 @@ flowchart LR
 
     OUT["5. Report<br/>flagged transactions + reasons"]
 
-    B --> C
+    B --> I
     D --> F
     S --> L
     S --> OUT
