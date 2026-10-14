@@ -43,6 +43,10 @@ CATEGORY_WEIGHTS = [0.30, 0.15, 0.20, 0.15, 0.05, 0.10, 0.05]
 CHANNELS = ["POS", "online", "ATM"]
 CHANNEL_WEIGHTS = [0.35, 0.55, 0.10]
 
+SPLIT_AT = datetime(2026, 9, 13)     # first 12 days go to load 1, last 2 days to load 2
+TXN_COLUMNS = ["txn_id", "customer_id", "ts", "amount", "merchant_category", "city", "channel"]
+BAD_TS = ["31-13-2026", "not a date", "2026/09/05 10:00"]
+
 
 def haversine_km(lat1, lon1, lat2, lon2):
     """Straight-line distance in km between two points on Earth."""
@@ -264,6 +268,73 @@ def write_ground_truth(path, txns):
     print(f"ground truth: {len(rows)} rows, {dict(sorted(counts.items()))}")
 
 
+def make_source_rows(txns):
+    """Turn transactions into text rows (7 columns). Remember which load each row belongs to."""
+    rows = []
+    for t in txns:
+        rows.append({
+            "txn_id": t["txn_id"],
+            "customer_id": t["customer_id"],
+            "ts": t["ts"].strftime("%Y-%m-%d %H:%M:%S"),
+            "amount": f"{t['amount']:.2f}",
+            "merchant_category": t["merchant_category"],
+            "city": t["city"],
+            "channel": t["channel"],
+            "_normal": t["fraud_type"] == "normal",
+            "_load": 1 if t["ts"] < SPLIT_AT else 2,
+        })
+    return rows
+
+
+def inject_quality_problems(py_rng, rows):
+    """Damage some ordinary rows on purpose. Each damaged row gets exactly one problem."""
+    n = len(rows)
+    counts = {
+        "duplicates": round(0.02 * n),
+        "null_customer": round(0.005 * n),
+        "null_amount": round(0.005 * n),
+        "non_positive_amount": round(0.005 * n),
+        "bad_timestamp": round(0.005 * n),
+        "city_variant": round(0.02 * n),
+    }
+    candidates = [i for i, r in enumerate(rows) if r["_normal"]]
+    py_rng.shuffle(candidates)
+    chosen, pos = {}, 0
+    for name, k in counts.items():
+        chosen[name] = candidates[pos:pos + k]
+        pos += k
+
+    for i in chosen["null_customer"]:
+        rows[i]["customer_id"] = ""
+    for i in chosen["null_amount"]:
+        rows[i]["amount"] = ""
+    for i in chosen["non_positive_amount"]:
+        rows[i]["amount"] = py_rng.choice(["0", "0.00", "-" + rows[i]["amount"]])
+    for i in chosen["bad_timestamp"]:
+        rows[i]["ts"] = py_rng.choice(BAD_TS)
+    for i in chosen["city_variant"]:
+        city = rows[i]["city"]
+        rows[i]["city"] = py_rng.choice(
+            [city.lower(), city.upper(), " " + city, city + " ", "  " + city.lower()]
+        )
+    # Exact copies of untouched rows (same txn_id), placed in the same load as the original.
+    rows.extend(dict(rows[i]) for i in chosen["duplicates"])
+    print("quality problems added:", {k: len(v) for k, v in chosen.items()})
+
+
+def write_transaction_files(py_rng, out_dir, rows):
+    """Shuffle each load and write transactions_day1.csv and transactions_day2.csv."""
+    for load in (1, 2):
+        part = [r for r in rows if r["_load"] == load]
+        py_rng.shuffle(part)
+        write_csv(
+            out_dir / f"transactions_day{load}.csv",
+            TXN_COLUMNS,
+            [[r[c] for c in TXN_COLUMNS] for r in part],
+        )
+        print(f"transactions_day{load}.csv: {len(part)} rows")
+
+
 def summarize(txns, customers):
     """Print quick checks on the generated transactions."""
     home = {c["customer_id"]: c["home_city"] for c in customers}
@@ -314,6 +385,10 @@ def main():
     inject_large_amount(py_rng, np_rng, txns, customers, used)
     assign_txn_ids(txns)
     write_ground_truth(out_dir / "ground_truth.csv", txns)
+
+    rows = make_source_rows(txns)
+    inject_quality_problems(py_rng, rows)
+    write_transaction_files(py_rng, out_dir, rows)
 
 if __name__ == "__main__":
     main()
