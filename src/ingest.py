@@ -1,12 +1,13 @@
 """Raw ingestion: load CSV files into raw_transactions exactly as they arrive."""
 import hashlib
+import csv
 import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
 
-from src.config import DB_PATH, SCHEMA_PATH
+from src.config import DB_PATH, REFERENCE_DIR, SAMPLE_DIR, SCHEMA_PATH
 
 log = logging.getLogger(__name__)
 
@@ -75,3 +76,48 @@ def ingest_file(conn, path):
         )
     log.info("%s: loaded %d rows", name, len(records))
     return len(records)
+
+def read_csv_rows(path):
+    """Read a small CSV into a list of dictionaries."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def load_reference_tables(conn):
+    """Load city_coords, gen_customers and eval_ground_truth. Safe to run again."""
+    cities = read_csv_rows(REFERENCE_DIR / "city_coords.csv")
+    customers = read_csv_rows(SAMPLE_DIR / "customers.csv")
+    truth = read_csv_rows(SAMPLE_DIR / "ground_truth.csv")
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO city_coords (city, lat, lon) VALUES (?,?,?)",
+            [(r["city"], float(r["lat"]), float(r["lon"])) for r in cities],
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO gen_customers (customer_id, home_city, typical_spend) VALUES (?,?,?)",
+            [(r["customer_id"], r["home_city"], float(r["typical_spend"])) for r in customers],
+        )
+        conn.executemany(
+            "INSERT OR REPLACE INTO eval_ground_truth (txn_id, is_fraud, fraud_type) VALUES (?,?,?)",
+            [(r["txn_id"], int(r["is_fraud"]), r["fraud_type"]) for r in truth],
+        )
+    log.info("reference tables: %d cities, %d customers, %d ground-truth rows",
+             len(cities), len(customers), len(truth))
+
+
+def main(files=None):
+    """Load every transaction CSV (or the given files), then the reference tables."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    conn = connect()
+    init_db(conn)
+    paths = files or sorted(SAMPLE_DIR.glob("transactions_*.csv"))
+    for p in paths:
+        ingest_file(conn, p)
+    load_reference_tables(conn)
+    total = conn.execute("SELECT COUNT(*) FROM raw_transactions").fetchone()[0]
+    log.info("raw_transactions now has %d rows", total)
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()
