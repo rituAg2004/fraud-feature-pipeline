@@ -20,7 +20,11 @@ this order:
 
 
 import re
-from datetime import datetime
+import logging
+import pandas as pd
+from datetime import datetime, timezone
+
+log = logging.getLogger(__name__)
 
 TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 TS_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
@@ -59,3 +63,37 @@ def validate_row(row):
         return "BAD_TIMESTAMP"
 
     return None
+
+SOURCE_COLS = ["txn_id", "customer_id", "ts", "amount",
+               "merchant_category", "city", "channel"]
+
+
+def split_raw(conn):
+    """Read raw rows, return (valid_df, invalid_df); rebuild quarantine table."""
+    raw = pd.read_sql_query(
+        "SELECT raw_id, source_file, " + ", ".join(SOURCE_COLS)
+        + " FROM raw_transactions ORDER BY raw_id",
+        conn,
+    )
+    reasons = raw.apply(lambda r: validate_row(r.to_dict()), axis=1)
+    invalid = raw[reasons.notna()].copy()
+    invalid["reason"] = reasons[reasons.notna()]
+    valid = raw[reasons.isna()].copy()
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    rows = [
+        (r.source_file, r.txn_id, r.customer_id, r.ts, r.amount,
+         r.merchant_category, r.city, r.channel, r.reason, now)
+        for r in invalid.itertuples(index=False)
+    ]
+    with conn:
+        conn.execute("DELETE FROM quarantine_transactions")
+        conn.executemany(
+            "INSERT INTO quarantine_transactions "
+            "(source_file, txn_id, customer_id, ts, amount, "
+            " merchant_category, city, channel, reason, quarantined_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+    log.info("split raw: %d valid, %d quarantined", len(valid), len(invalid))
+    return valid, invalid
