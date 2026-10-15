@@ -64,6 +64,7 @@ def validate_row(row):
 
     return None
 
+
 SOURCE_COLS = ["txn_id", "customer_id", "ts", "amount",
                "merchant_category", "city", "channel"]
 
@@ -97,3 +98,42 @@ def split_raw(conn):
         )
     log.info("split raw: %d valid, %d quarantined", len(valid), len(invalid))
     return valid, invalid
+
+
+def load_clean(conn, valid):
+    """Dedupe valid rows by txn_id and insert into clean_transactions.
+
+    Returns (rows_inserted, duplicates_removed).
+    """
+    df = valid.sort_values("raw_id").drop_duplicates("txn_id", keep="first").copy()
+    dup_in_batch = len(valid) - len(df)
+
+    df["city"] = df["city"].apply(normalise_city)
+    df["amount"] = df["amount"].astype(float)
+    parsed = pd.to_datetime(df["ts"], format=TS_FORMAT, utc=True)
+    df["ts_epoch"] = (parsed - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(seconds=1)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    rows = list(zip(
+        df["txn_id"].tolist(), df["customer_id"].tolist(), df["ts"].tolist(),
+        df["ts_epoch"].astype(int).tolist(), df["amount"].tolist(),
+        df["merchant_category"].tolist(), df["city"].tolist(),
+        df["channel"].tolist(), df["source_file"].tolist(), [now] * len(df),
+    ))
+
+    with conn:
+        before = conn.execute("SELECT COUNT(*) FROM clean_transactions").fetchone()[0]
+        conn.executemany(
+            "INSERT OR IGNORE INTO clean_transactions "
+            "(txn_id, customer_id, ts, ts_epoch, amount, merchant_category, "
+            " city, channel, source_file, loaded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        after = conn.execute("SELECT COUNT(*) FROM clean_transactions").fetchone()[0]
+
+    inserted = after - before
+    ignored_existing = len(df) - inserted
+    duplicates_removed = dup_in_batch + ignored_existing
+    log.info("clean load: %d inserted, %d duplicates removed", inserted, duplicates_removed)
+    return inserted, duplicates_removed
