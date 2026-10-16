@@ -4,6 +4,10 @@ import logging
 
 import pandas as pd
 
+from datetime import datetime, timezone
+
+from src.config import load_rules
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,3 +56,32 @@ def band_for(score, cfg):
     if score >= cfg["bands"]["medium"]:
         return "MEDIUM"
     return "LOW"
+
+
+def build_scores(conn, cfg=None):
+    """Score every row of the features table and store results; return row count."""
+    cfg = cfg or load_rules()
+    df = pd.read_sql_query("SELECT * FROM features", conn)
+    scored_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    rows = []
+    for row in df.to_dict("records"):
+        points, fired = score_row(row, cfg)
+        rows.append((
+            row["txn_id"],
+            points,
+            band_for(points, cfg),
+            ",".join(fired),
+            cfg["rules_version"],
+            scored_at,
+        ))
+
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO scores "
+            "(txn_id, score, band, triggered_rules, rules_version, scored_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+    logger.info("stored %d scores", len(rows))
+    return len(rows)
