@@ -1,6 +1,8 @@
 """AI explanation layer: prompt, template fallback, validator, storage."""
 import logging
 import math
+import numbers
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -89,3 +91,53 @@ def template_explanation(row: dict, rules: dict) -> str:
         parts.append("flagged by the scoring rules")
     text = "; ".join(parts)
     return f"{text[0].upper()}{text[1:]}. Score {row['score']} ({row['band']})."
+
+MAX_EXPLANATION_CHARS = 600
+NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _numbers_in(obj) -> list:
+    """Collect every int/float inside a (nested) dict or list, ignoring bools and NaN."""
+    found = []
+    if isinstance(obj, dict):
+        for value in obj.values():
+            found.extend(_numbers_in(value))
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            found.extend(_numbers_in(value))
+    elif isinstance(obj, numbers.Real) and not isinstance(obj, bool):
+        if not math.isnan(float(obj)):
+            found.append(float(obj))
+    return found
+
+
+def allowed_numbers(row: dict, cfg: dict) -> list:
+    """Numbers the AI may quote: facts shown in the prompt plus rules.yaml values."""
+    facts = [row.get("amount"), row.get("score")]
+    for rule in fired_rules(row):
+        for feature in RULE_FACTS.get(rule, []):
+            facts.append(row.get(feature))
+    return _numbers_in(facts) + _numbers_in(cfg)
+
+
+def validate_explanation(text, row: dict, cfg: dict, known_cities=()):
+    """Return (ok, reason). Rejects empty, long, invented-number or wrong-city text."""
+    if not text or not text.strip():
+        return False, "empty answer"
+    if len(text) >= MAX_EXPLANATION_CHARS:
+        return False, "answer too long"
+
+    allowed = allowed_numbers(row, cfg)
+    for token in NUMBER_RE.findall(text):
+        value = float(token.replace(",", ""))
+        if not any(math.isclose(value, a, rel_tol=0.01, abs_tol=0.05) for a in allowed):
+            return False, f"number not in facts: {token}"
+
+    own_cities = {str(row.get("city", "")).lower(), str(row.get("prev_city", "")).lower()}
+    for city in known_cities:
+        if city.lower() in own_cities:
+            continue
+        if re.search(rf"\b{re.escape(city)}\b", text, flags=re.IGNORECASE):
+            return False, f"city not in facts: {city}"
+
+    return True, "ok"
