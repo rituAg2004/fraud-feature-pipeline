@@ -48,3 +48,26 @@ def test_velocity_counts_last_hour(conn):
         "SELECT score, band, triggered_rules FROM scores WHERE txn_id = 'T4'"
     ).fetchone()
     assert (score, band, rules) == (40, "MEDIUM", "VELOCITY")
+
+
+def test_cold_start_no_crash(conn):
+    """First transaction with a huge amount: NULL features, score 0, no crash."""
+    insert_clean(conn, [("T0", "C9", BASE, 90000.0, "Delhi")])
+
+    build_features(conn)
+    build_scores(conn)
+
+    z, hist, speed, dist, prev_city = conn.execute(
+        "SELECT amount_robust_z, history_count, speed_kmh, distance_km, prev_city "
+        "FROM features WHERE txn_id = 'T0'"
+    ).fetchone()
+    assert z is None
+    assert hist == 0
+    assert speed is None
+    assert dist is None
+    assert prev_city is None
+
+    score, band, rules = conn.execute(
+        "SELECT score, band, triggered_rules FROM scores WHERE txn_id = 'T0'"
+    ).fetchone()
+    assert (score, band, rules) == (0, "LOW", "")
