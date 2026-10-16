@@ -1,10 +1,10 @@
-cat > docs/sample_output.md <<'EOF'
 # Sample output from a full run
 
-Generated from a fresh database with `LLM_PROVIDER=none`, so every explanation
-below comes from the template fallback (`source = fallback`). With Gemini
-enabled, the `source` column shows `llm` for rows the model explained and the
-validator accepted.
+Generated from a fresh database with `LLM_PROVIDER=ollama` (local model `llama3.2`).
+Rows with `source = llm` were written by the model and accepted by the validator.
+Rows with `source = fallback` use the template, either because the model failed or
+because its answer was rejected (for example, it contained a number that was not in
+the facts). Scores are identical either way.
 
 Command: `python -m src.run_all` (after deleting `data/pipeline.db`)
 
@@ -19,8 +19,12 @@ clean load: 4466 inserted, 91 duplicates removed
 loaded 4466 rows from SQL features
 stored 4466 feature rows
 stored 4466 scores
-LLM failed 3 times in a row; using template for the rest
-explained 50 rows: 0 by llm, 50 by fallback
+AI answer rejected for T001660: number not in facts: 1
+AI answer rejected for T002362: number not in facts: 1
+AI answer rejected for T002378: number not in facts: 1
+AI answer rejected for T003168: number not in facts: 1
+AI answer rejected for T003171: number not in facts: 1
+explained 20 rows: 15 by llm, 5 by fallback
 wrote 82 flagged rows to output/flagged_report.csv
 wrote rule coverage to output/rule_coverage.md
 run 1 SUCCESS: files_loaded=2, rows_in=4649, rows_clean=4466,
@@ -28,20 +32,14 @@ run 1 SUCCESS: files_loaded=2, rows_in=4649, rows_clean=4466,
 pytest -q: 12 passed
 ```
 
-## Top 10 rows of output/flagged_report.csv
+## First rows of output/flagged_report.csv
 
 ```
 txn_id,customer_id,ts,amount,city,score,band,triggered_rules,explanation,source
-T001164,C074,2026-09-04 16:53:31,1247.69,Pune,40,MEDIUM,IMPOSSIBLE_TRAVEL,"Previous transaction was in Kolkata 10.6 minutes earlier, about 1,575 km away. Score 40 (MEDIUM).",fallback
-T001388,C020,2026-09-05 06:16:14,692.67,Chennai,40,MEDIUM,IMPOSSIBLE_TRAVEL,"Previous transaction was in Kolkata 29.8 minutes earlier, about 1,358 km away. Score 40 (MEDIUM).",fallback
-T001659,C006,2026-09-06 02:29:32,197.81,Kolkata,40,MEDIUM,VELOCITY,5 transactions by this customer within 60 minutes. Score 40 (MEDIUM).,fallback
+T001164,C074,2026-09-04 16:53:31,1247.69,Pune,40,MEDIUM,IMPOSSIBLE_TRAVEL,"The flagged transaction from Pune to Kolkata resulted in a significant distance of 1575.4 km, which may indicate a long-distance travel. The minutes since the previous city, Kolkata, are relatively short at 10.6, suggesting a possible anomaly in the travel pattern.",llm
+T001388,C020,2026-09-05 06:16:14,692.67,Chennai,40,MEDIUM,IMPOSSIBLE_TRAVEL,"The flagged transaction from Chennai to Kolkata resulted in a significant distance of 1358.4 km, which may indicate a long-distance travel. The minutes since the previous city, Kolkata, are 29.8, suggesting a relatively short travel time, which could be inconsistent with the distance traveled.",llm
+T001659,C006,2026-09-06 02:29:32,197.81,Kolkata,40,MEDIUM,VELOCITY,"The flagged transaction from Kolkata has a medium score of 40, indicating a moderate level of risk. The transaction's velocity, as measured by the 5 transactions in the last hour, is above the threshold, which may warrant further investigation.",llm
 T001660,C006,2026-09-06 02:31:10,208.71,Kolkata,40,MEDIUM,VELOCITY,6 transactions by this customer within 60 minutes. Score 40 (MEDIUM).,fallback
-T001662,C006,2026-09-06 02:34:51,218.32,Kolkata,40,MEDIUM,VELOCITY,7 transactions by this customer within 60 minutes. Score 40 (MEDIUM).,fallback
-T001663,C006,2026-09-06 02:36:32,175.53,Kolkata,40,MEDIUM,VELOCITY,8 transactions by this customer within 60 minutes. Score 40 (MEDIUM).,fallback
-T001755,C145,2026-09-06 10:00:02,406.51,Kolkata,40,MEDIUM,IMPOSSIBLE_TRAVEL,"Previous transaction was in Bengaluru 17.6 minutes earlier, about 1,561 km away. Score 40 (MEDIUM).",fallback
-T002124,C134,2026-09-07 12:14:18,735.36,Kochi,40,MEDIUM,IMPOSSIBLE_TRAVEL,"Previous transaction was in Ahmedabad 11.3 minutes earlier, about 1,508 km away. Score 40 (MEDIUM).",fallback
-T002176,C080,2026-09-07 16:04:24,510.78,Jaipur,40,MEDIUM,IMPOSSIBLE_TRAVEL,"Previous transaction was in Hyderabad 24.2 minutes earlier, about 1,095 km away. Score 40 (MEDIUM).",fallback
-T002362,C073,2026-09-08 06:14:27,257.2,Mumbai,40,MEDIUM,VELOCITY,5 transactions by this customer within 60 minutes. Score 40 (MEDIUM).,fallback
 ```
 
 ## Rule coverage (output/rule_coverage.md)
@@ -66,6 +64,9 @@ Not-fraud transactions that were still flagged: 43 of 4408.
 - Each injected fraud type trips exactly one rule, so every flag is MEDIUM.
   HIGH appears when two rules fire together (covered by a test).
 - Legitimate large purchases and some normal high amounts are false positives.
-- Only the top 50 flagged rows get an explanation per run (`max_items` in
-  `config/rules.yaml`).
-EOF
+- Only the top 20 flagged rows get an explanation per run (`max_items` in
+  `config/rules.yaml`). The other flagged rows keep their score and fired rules.
+- The validator rejected 5 model answers in this run because they contained a number
+  that was not in the facts; those rows use the template instead.
+- AI wording can vary between runs, so explanations may differ slightly if you rerun
+  from a fresh database. Scores never change.

@@ -1,5 +1,4 @@
 # Fraud Feature Pipeline (DAI-023)
-**Demo video:** <link>
 
 A pipeline that turns synthetic card transactions into fraud features (velocity, unusual amount, location change) and a rule-based risk score, with AI-written explanations for flagged transactions.
 
@@ -87,7 +86,8 @@ flowchart LR
 - **pytest**: tests
 - **requests**: HTTP call to the LLM provider
 - **python-dotenv**: reads settings from `.env`
-- **Google Gemini** (optional): writes explanations for flagged transactions
+- **Google Gemini** (optional): hosted model that can write explanations for flagged transactions
+- **Ollama** (optional): runs a small model locally, so no API key is needed
 
 ## Project structure
 
@@ -119,7 +119,7 @@ fraud-feature-pipeline/
 │   ├── clean.py           validation, quarantine, deduplication
 │   ├── features.py        velocity, amount baseline, location change
 │   ├── scoring.py         rules to score and band
-│   ├── llm_client.py      LLM interface (gemini, none)
+│   ├── llm_client.py      LLM interface (ollama, gemini, none)
 │   ├── explain.py         prompt, validator, template fallback
 │   ├── report.py          flagged report and rule coverage
 │   └── run_all.py         runs the whole pipeline
@@ -144,7 +144,10 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-The default `LLM_PROVIDER=none` needs no key: explanations then come from the template. To use Gemini, set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY` and `GEMINI_MODEL` in your local `.env`. Never commit `.env`.
+The default `LLM_PROVIDER=none` needs no key: explanations then come from the template. Never commit `.env`.
+
+- **Local model (Ollama, free, no key):** install Ollama, run `ollama pull llama3.2`, keep Ollama running, then set `LLM_PROVIDER=ollama`, `OLLAMA_URL=http://localhost:11434` and `OLLAMA_MODEL=llama3.2` in your local `.env`.
+- **Gemini:** set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY` and `GEMINI_MODEL` in your local `.env`.
 
 ## How to run
 
@@ -217,10 +220,10 @@ Bands: LOW 0 to 29, MEDIUM 30 to 59, HIGH 60 and above. One rule alone gives MED
 - **What goes in:** only facts computed by the pipeline (amount, city, score, band, fired rules and the feature values behind them). See `build_prompt` in `src/explain.py`.
 - **What comes out:** a two-sentence explanation for a fraud analyst.
 - **Where it is stored:** the `explanations` table, with `source` (llm or fallback) and the model name.
-- **Which transactions:** only MEDIUM and HIGH, highest score first, up to `explain.max_items` (50). A stored explanation is not regenerated on rerun.
+- **Which transactions:** only MEDIUM and HIGH, highest score first, up to `explain.max_items` (20). A stored explanation is not regenerated on rerun.
 - **Bad answers:** `validate_explanation` rejects empty or too long text, any number that is not in the input facts or the thresholds, and any city that is not the current or previous city. A rejected answer is replaced by `template_explanation`, a deterministic sentence built from the fired rules.
 - **Provider down:** if the provider fails, the template is used. After `max_consecutive_failures` failures in a row, the rest of the run uses the template, so a dead provider does not slow the pipeline further.
-- **Isolation:** all provider code is in `src/llm_client.py` behind the `LLMClient` interface (`NullClient` and `GeminiClient`). Nothing else imports a provider; the rest of the code only calls `get_client()`. `LLM_PROVIDER` in `.env` selects the provider (`none` or `gemini`).
+- **Isolation:** all provider code is in `src/llm_client.py` behind the `LLMClient` interface (`NullClient`, `GeminiClient` and `OllamaClient`). Nothing else imports a provider; the rest of the code only calls `get_client()`. `LLM_PROVIDER` in `.env` selects the provider (`none`, `ollama` or `gemini`).
 - **Rules versus AI:** features, score, band and triggered rules are deterministic. The AI only writes explanation text and can never change a score. The failure demo (`scripts/demo_failure.sh`) shows the pipeline finishing with identical scores when the AI is off.
 
 
@@ -285,7 +288,9 @@ The labels come from our own generator, so this is a sanity check, not accuracy.
 - **Baseline can contain earlier fraud**, because flagged transactions are not removed from it.
 - **Full recompute.** Features are recomputed for all rows on every run.
 - **Single machine, SQLite.**
-- **AI wording can vary**, and a free-tier provider can be slow or unavailable (HTTP 503, timeouts). The pipeline then falls back to templates.
+- **AI wording can vary**, and a free-tier provider can be slow or unavailable (HTTP 503, timeouts). A local model can also be slow on a laptop without a GPU. The pipeline then falls back to templates.
+- **Only the top 20 flagged transactions are explained per run** (`explain.max_items`). The rest still have a score and fired rules, but no explanation text.
+- **A small local model sometimes writes a number that is not in the facts.** The validator rejects such answers and the template is used, so some explanations come from the template even when the AI is on.
 
 
 ## What I would improve for production
@@ -304,7 +309,7 @@ The labels come from our own generator, so this is a sanity check, not accuracy.
 Commands to run, in order:
 
 1. Show `docs/architecture.md` (the diagram and the rules-versus-AI table).
-2. `rm -f data/pipeline.db` then `python -m src.run_all` (clean data, quarantine, scores, report).
+2. `python -m src.run_all` (already loaded files are skipped, which shows safe reruns; for a fresh start use `rm -f data/pipeline.db` first, it takes a few minutes with a local model).
 3. Show the top flagged transactions: `head -n 6 output/flagged_report.csv`.
 4. `python scripts/masking_demo.py` (normal z-score vs robust z-score).
 5. `pytest -q` (12 passed).

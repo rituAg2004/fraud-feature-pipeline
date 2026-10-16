@@ -11,7 +11,7 @@ Turn synthetic card transactions into three fraud indicators (velocity, unusual 
 - **SQLite for storage, pandas for median and MAD.** SQLite handles time windows well (velocity, previous city) but has no median function, so pandas computes the baseline. No server is needed, so setup is easy.
 - **Raw, clean and quarantine layers.** Raw keeps data exactly as it arrived. Bad rows go to quarantine with a reason and are never silently dropped.
 - **Idempotent loading.** Files are skipped by hash, clean rows use `INSERT OR IGNORE`, features and scores use `INSERT OR REPLACE`. Running twice changes nothing (test `test_rerun_is_idempotent`).
-- **AI behind one interface with a validator and fallback.** `llm_client.py` is the only place that knows about providers (`gemini`, `none`). The validator rejects an answer containing a number or city that is not in the input facts, and a deterministic template is used instead. If the provider fails repeatedly, the rest of the run uses templates.
+- **AI behind one interface with a validator and fallback.** `llm_client.py` is the only place that knows about providers (`ollama`, `gemini`, `none`). The validator rejects an answer containing a number or city that is not in the input facts, and a deterministic template is used instead. If the provider fails repeatedly, the rest of the run uses templates.
 - **Generator-only data kept away from the detector.** `home_city`, `typical_spend` and ground truth are never read by the detector (test `test_detector_independent_of_generator_tables`).
 
 ## Trade-offs
@@ -19,6 +19,7 @@ Turn synthetic card transactions into three fraud indicators (velocity, unusual 
 - **Full recompute vs incremental features.** Features are recomputed for every row on each run. This is simple and correct, but would not scale to very large data.
 - **Rule transparency vs recall.** Rules are easy to explain and change but use fixed thresholds. Velocity only fires from the fifth transaction, so 23 of 42 card-testing transactions are flagged.
 - **Synthetic vs real data.** Synthetic data lets me inject duplicates, nulls and fraud patterns, but labels come from my own generator, so the rule coverage table is a sanity check, not accuracy.
+- **Explanation coverage vs speed.** Only the top 20 flagged transactions (highest score first) are explained per run, because a local model is slow. The rest keep their score and fired rules, but have no explanation text.
 
 ## Alternatives considered
 
