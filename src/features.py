@@ -83,3 +83,20 @@ def add_amount_baseline(df, window=50, min_history=5):
     )
     out["history_count"] = out["history_count"].fillna(0).astype(int)
     return out.drop(columns=["_earlier"]).sort_index()
+
+def robust_z(amount, median, mad, history=None):
+    """Return robust z-score of amount; NaN if no baseline is available."""
+    if np.isnan(median) or np.isnan(mad):
+        return np.nan
+    if mad > 0:
+        scale = 1.4826 * mad
+    else:
+        scale = 0.0
+        if history is not None and len(history) > 0:
+            h = np.asarray(history, dtype=float)
+            h = h[~np.isnan(h)]
+            if len(h) > 0:
+                scale = 1.253314 * np.mean(np.abs(h - median))
+        if scale == 0:
+            scale = max(0.1 * median, 1.0)
+    return (amount - median) / scale
