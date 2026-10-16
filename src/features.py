@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+from datetime import datetime, timezone
+
 logger = logging.getLogger(__name__)
 
 SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
@@ -57,6 +59,7 @@ def add_location_features(df, coords):
 
     return out.drop(columns=["lat", "lon", "prev_lat", "prev_lon"])
 
+
 def _mad(values):
     """Median absolute deviation of a 1-D array, ignoring NaN."""
     med = np.nanmedian(values)
@@ -84,6 +87,7 @@ def add_amount_baseline(df, window=50, min_history=5):
     out["history_count"] = out["history_count"].fillna(0).astype(int)
     return out.drop(columns=["_earlier"]).sort_index()
 
+
 def robust_z(amount, median, mad, history=None):
     """Return robust z-score of amount; NaN if no baseline is available."""
     if np.isnan(median) or np.isnan(mad):
@@ -100,3 +104,52 @@ def robust_z(amount, median, mad, history=None):
         if scale == 0:
             scale = max(0.1 * median, 1.0)
     return (amount - median) / scale
+
+
+FEATURE_COLUMNS = [
+    "txn_id", "customer_id", "ts_epoch", "amount",
+    "txn_count_1h", "history_count", "baseline_median", "baseline_mad",
+    "amount_robust_z", "prev_city", "minutes_since_prev",
+    "distance_km", "speed_kmh", "computed_at",
+]
+
+
+def build_features(conn, window=50, min_history=5):
+    """Compute all features, store them in the features table, return row count."""
+    df = load_sql_features(conn)
+    coords = pd.read_sql_query("SELECT city, lat, lon FROM city_coords", conn)
+
+    df = add_location_features(df, coords)
+    df = add_amount_baseline(df, window=window, min_history=min_history)
+
+    # df is sorted by customer and time, so cumcount() is the position
+    # of each row inside its customer's history.
+    amounts_by_customer = {
+        cid: g["amount"].to_numpy() for cid, g in df.groupby("customer_id")
+    }
+    position = df.groupby("customer_id").cumcount()
+
+    z_values = []
+    for a, m, d, cid, pos in zip(
+        df["amount"], df["baseline_median"], df["baseline_mad"],
+        df["customer_id"], position,
+    ):
+        history = None
+        if not np.isnan(d) and d == 0:
+            history = amounts_by_customer[cid][max(0, pos - window):pos]
+        z_values.append(robust_z(a, m, d, history))
+    df["amount_robust_z"] = z_values
+
+    df["computed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    out = df[FEATURE_COLUMNS].astype(object)
+    out = out.where(df[FEATURE_COLUMNS].notna(), None)
+    placeholders = ",".join("?" * len(FEATURE_COLUMNS))
+    sql = (
+        f"INSERT OR REPLACE INTO features ({','.join(FEATURE_COLUMNS)}) "
+        f"VALUES ({placeholders})"
+    )
+    with conn:
+        conn.executemany(sql, out.itertuples(index=False, name=None))
+    logger.info("stored %d feature rows", len(out))
+    return len(out)
