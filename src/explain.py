@@ -3,6 +3,12 @@ import logging
 import math
 import numbers
 import re
+from datetime import datetime, timezone
+
+import pandas as pd
+
+from src.config import load_rules
+from src.llm_client import LLMUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -141,3 +147,58 @@ def validate_explanation(text, row: dict, cfg: dict, known_cities=()):
             return False, f"city not in facts: {city}"
 
     return True, "ok"
+
+
+FLAGGED_SQL = """
+SELECT s.txn_id, s.score, s.band, s.triggered_rules,
+       c.customer_id, c.ts, c.amount, c.city,
+       f.txn_count_1h, f.baseline_median, f.amount_robust_z,
+       f.prev_city, f.minutes_since_prev, f.distance_km, f.speed_kmh
+FROM scores s
+JOIN features f ON f.txn_id = s.txn_id
+JOIN clean_transactions c ON c.txn_id = s.txn_id
+LEFT JOIN explanations e ON e.txn_id = s.txn_id
+WHERE s.band IN ('MEDIUM', 'HIGH') AND e.txn_id IS NULL
+ORDER BY s.score DESC, s.txn_id
+LIMIT ?
+"""
+
+
+def explain_flagged(conn, client, cfg=None) -> dict:
+    """Explain MEDIUM/HIGH rows that have no explanation yet; return counts by source."""
+    cfg = cfg or load_rules()
+    max_items = cfg["explain"]["max_items"]
+    timeout = cfg["explain"]["timeout_s"]
+
+    rows = pd.read_sql_query(FLAGGED_SQL, conn, params=(max_items,)).to_dict("records")
+    known_cities = [r[0] for r in conn.execute("SELECT city FROM city_coords")]
+
+    counts = {"llm": 0, "fallback": 0}
+    for row in rows:
+        text, source, model = None, "fallback", "template"
+        try:
+            answer = client.generate(build_prompt(row, cfg), timeout=timeout)
+            ok, reason = validate_explanation(answer, row, cfg, known_cities)
+            if ok:
+                text, source, model = answer.strip(), "llm", client.name
+            else:
+                logger.warning("AI answer rejected for %s: %s", row["txn_id"], reason)
+        except LLMUnavailable as exc:
+            logger.warning("LLM unavailable for %s: %s", row["txn_id"], exc)
+
+        if text is None:
+            text = template_explanation(row, cfg)
+
+        conn.execute(
+            "INSERT OR IGNORE INTO explanations "
+            "(txn_id, explanation_text, source, model_name, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (row["txn_id"], text, source, model,
+             datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        )
+        conn.commit()
+        counts[source] += 1
+
+    logger.info("explained %d rows: %d by llm, %d by fallback",
+                len(rows), counts["llm"], counts["fallback"])
+    return counts
