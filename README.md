@@ -218,3 +218,67 @@ Bands: LOW 0 to 29, MEDIUM 30 to 59, HIGH 60 and above. One rule alone gives MED
 - **Provider down:** if the provider fails, the template is used. After `max_consecutive_failures` failures in a row, the rest of the run uses the template, so a dead provider does not slow the pipeline further.
 - **Isolation:** all provider code is in `src/llm_client.py` behind the `LLMClient` interface (`NullClient` and `GeminiClient`). Nothing else imports a provider; the rest of the code only calls `get_client()`. `LLM_PROVIDER` in `.env` selects the provider (`none` or `gemini`).
 - **Rules versus AI:** features, score, band and triggered rules are deterministic. The AI only writes explanation text and can never change a score. The failure demo (`scripts/demo_failure.sh`) shows the pipeline finishing with identical scores when the AI is off.
+
+
+## Assumptions
+
+- All timestamps are UTC and all amounts are in one currency.
+- Data is synthetic; fraud labels are injected by our own generator.
+- Distance is a straight line between city centres, not road distance.
+- `home_city`, `typical_spend` and ground truth exist only in the generator and evaluation; the detector never reads them.
+- A customer needs at least 5 earlier transactions before the amount rule can fire.
+- The amount baseline is the last 50 earlier transactions of the same customer.
+- Flagged transactions are not removed from the baseline (this needs analyst-confirmed labels; future work).
+
+## Tests performed
+
+Run `pytest -q`. Expected: `12 passed`.
+
+| Test | File | Kind | What it proves |
+|---|---|---|---|
+| `test_duplicate_txn_id_keeps_one` | test_clean.py | Edge case | Duplicates collapse to one row and are counted |
+| `test_invalid_rows_quarantined_with_reasons` | test_clean.py | Edge case | Bad rows are kept with a reason, not dropped |
+| `test_rerun_is_idempotent` | test_idempotency.py | Rerun safety | A second run changes no table |
+| `test_velocity_counts_last_hour` | test_features.py | Logic | Velocity counts correctly and fires at 5 |
+| `test_cold_start_no_crash` | test_features.py | Edge case | First transaction gives NULL features and no crash |
+| `test_mad_zero_history` | test_features.py | Edge case | Equal past amounts do not cause divide-by-zero |
+| `test_impossible_travel` | test_scoring.py | Logic | Travel rule fires only when speed is too high |
+| `test_two_rules_together_give_high` | test_scoring.py | Logic | Two rules together reach the HIGH band |
+| `test_hallucinated_number_is_rejected` | test_explain.py | Failure | An AI answer with an invented number is replaced by the template |
+| `test_correct_ai_answer_is_accepted` | test_explain.py | Logic | A correct AI answer is stored with source `llm` |
+| `test_pipeline_survives_llm_outage` | test_explain.py | Failure | AI down: pipeline finishes, scores identical |
+| `test_detector_independent_of_generator_tables` | test_independence.py | Design check | Scores do not depend on generator-only tables |
+
+### Failure demonstration
+
+1. Run the pipeline normally (with a provider set) and check `SELECT source, COUNT(*) FROM explanations GROUP BY source;`.
+2. Run `bash scripts/demo_failure.sh`. It sets `LLM_PROVIDER=none` and uses a fresh database.
+3. The pipeline finishes with warning lines, every explanation has source `fallback`, and the count and sum of scores match the first run.
+
+The AI is an optional last layer: when it fails, the analyst still gets a template explanation and no score changes.
+
+## Sample output
+
+A full run on the sample data (4,649 raw rows, 4,466 clean, 92 quarantined, 82 flagged) is in [`docs/sample_output.md`](docs/sample_output.md). Rule coverage on the injected fraud:
+
+| fraud_type | transactions | flagged | VELOCITY | UNUSUAL_AMOUNT | IMPOSSIBLE_TRAVEL |
+|---|---|---|---|---|---|
+| card_testing | 42 | 23 | 23 | 0 | 0 |
+| impossible_travel | 8 | 8 | 0 | 0 | 8 |
+| large_amount | 8 | 8 | 0 | 8 | 0 |
+| legit_large (not fraud) | 5 | 5 | 0 | 5 | 0 |
+| normal | 4403 | 38 | 0 | 38 | 0 |
+
+The labels come from our own generator, so this is a sanity check, not accuracy.
+
+## Known limitations
+
+- **Synthetic labels.** Rule coverage shows which rule catches which injected pattern, not real-world accuracy.
+- **No HIGH on the sample data.** Each injected fraud type triggers one rule, and HIGH needs two. The HIGH band is covered by a unit test.
+- **Velocity fires only from the fifth transaction**, so 23 of 42 card-testing transactions are flagged; the first ones in a burst are not.
+- **False positives from small MAD.** When a customer's spend is very consistent, a normal rise can exceed the 3.5 threshold. 38 of 4,403 normal transactions (about 1%) were flagged this way, and the 5 legitimate large purchases are flagged too.
+- **Straight-line distance** between city centres.
+- **Baseline can contain earlier fraud**, because flagged transactions are not removed from it.
+- **Full recompute.** Features are recomputed for all rows on every run.
+- **Single machine, SQLite.**
+- **AI wording can vary**, and a free-tier provider can be slow or unavailable (HTTP 503, timeouts). The pipeline then falls back to templates.
