@@ -1,4 +1,9 @@
 """Show why a robust z-score catches fraud that a normal z-score misses."""
+import sys
+from pathlib import Path
+
+# Make the project root importable when running: python scripts/masking_demo.py
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 
 from src.features import _mad, robust_z
