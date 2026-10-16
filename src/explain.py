@@ -53,7 +53,8 @@ def build_prompt(row: dict, rules: dict) -> str:
             value = row.get(feature)
             if not _is_missing(value):
                 lines.append(f"{feature}: {_fmt(value)}")
-    lines.append(f"window_minutes: {rules['window_minutes']}")
+    if "VELOCITY" in fired:
+        lines.append(f"window_minutes: {rules['window_minutes']}")
 
     facts = "\n".join(lines)
     return (
