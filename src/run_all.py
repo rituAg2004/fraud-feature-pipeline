@@ -12,6 +12,7 @@ from src.features import build_features
 from src.scoring import build_scores
 from src.explain import explain_flagged
 from src.llm_client import get_client
+from src.report import write_flagged_report, write_rule_coverage
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +86,12 @@ def main(files=None):
         explained = explain_flagged(conn, get_client())
         log.info("explanations written: %d by llm, %d by fallback",
                  explained["llm"], explained["fallback"])
+
+        n_flagged = write_flagged_report(conn)
+        coverage_path = write_rule_coverage(conn)
+        log.info("report: %d flagged rows -> output/flagged_report.csv",
+                 n_flagged)
+        log.info("report: rule coverage -> %s", coverage_path)
 
         stats = {
             "files_loaded": files_loaded, "rows_in": rows_in,
