@@ -177,3 +177,44 @@ Demo scripts:
 python scripts/masking_demo.py    # normal z-score vs robust z-score
 bash scripts/demo_failure.sh      # pipeline survives an LLM outage
 ```
+
+## Data model and schema
+
+The full schema is in `sql/01_schema.sql` (11 tables). Raw, clean and quarantine tables hold the data at each cleaning stage; the rest hold computed results or generator-only data.
+
+| Table | What it holds | Why it exists |
+|---|---|---|
+| `ingested_files` | file name, sha256, row count | A file with the same hash is skipped on rerun; same name with a different hash is reported, not loaded |
+| `raw_transactions` | the 7 source columns as TEXT, source file | Data exactly as it arrived, so a bad value never breaks the load and cleaning can be redone |
+| `clean_transactions` | typed rows, `ts_epoch`, trimmed title-case city | Primary key on `txn_id` stops duplicates; epoch seconds make time windows easy in SQL |
+| `quarantine_transactions` | bad rows plus `reason` | Bad rows are kept, never silently dropped (NULL_TXN_ID, NULL_CUSTOMER, NULL_AMOUNT, NON_POSITIVE_AMOUNT, BAD_TIMESTAMP) |
+| `city_coords` | city, latitude, longitude | World fact used to compute distance between two cities |
+| `features` | velocity, amount baseline and robust z-score, previous city, distance, speed | Every computed fact; rules and the AI explanation read only this table |
+| `scores` | score (0 to 100), band, `triggered_rules`, `rules_version` | `triggered_rules` explains the score; `rules_version` says which thresholds made it |
+| `explanations` | text, `source` (llm or fallback), model name | Shows who wrote each explanation |
+| `pipeline_runs` | counts per run, status | Operational log; two runs can be compared in the rerun demo |
+| `gen_customers` | home city, typical spend | Generator-only profile; the detector never reads it |
+| `eval_ground_truth` | `is_fraud`, `fraud_type` | Used only by the report as a sanity check, never by the detector |
+
+## Rules
+
+All thresholds are in `config/rules.yaml`. Points add up and are capped at 100.
+
+| Rule | Fires when | Points | Catches |
+|---|---|---|---|
+| VELOCITY | 5 or more transactions by the customer in the last 60 minutes | 40 | card testing |
+| UNUSUAL_AMOUNT | at least 5 earlier transactions and robust z-score above 3.5 | 30 | large cash-out |
+| IMPOSSIBLE_TRAVEL | distance at least 50 km and implied speed above 800 km/h | 40 | cloned card used far away |
+
+Bands: LOW 0 to 29, MEDIUM 30 to 59, HIGH 60 and above. One rule alone gives MEDIUM; two rules together give HIGH.
+
+## AI approach
+
+- **What goes in:** only facts computed by the pipeline (amount, city, score, band, fired rules and the feature values behind them). See `build_prompt` in `src/explain.py`.
+- **What comes out:** a two-sentence explanation for a fraud analyst.
+- **Where it is stored:** the `explanations` table, with `source` (llm or fallback) and the model name.
+- **Which transactions:** only MEDIUM and HIGH, highest score first, up to `explain.max_items` (50). A stored explanation is not regenerated on rerun.
+- **Bad answers:** `validate_explanation` rejects empty or too long text, any number that is not in the input facts or the thresholds, and any city that is not the current or previous city. A rejected answer is replaced by `template_explanation`, a deterministic sentence built from the fired rules.
+- **Provider down:** if the provider fails, the template is used. After `max_consecutive_failures` failures in a row, the rest of the run uses the template, so a dead provider does not slow the pipeline further.
+- **Isolation:** all provider code is in `src/llm_client.py` behind the `LLMClient` interface (`NullClient` and `GeminiClient`). Nothing else imports a provider; the rest of the code only calls `get_client()`. `LLM_PROVIDER` in `.env` selects the provider (`none` or `gemini`).
+- **Rules versus AI:** features, score, band and triggered rules are deterministic. The AI only writes explanation text and can never change a score. The failure demo (`scripts/demo_failure.sh`) shows the pipeline finishing with identical scores when the AI is off.
