@@ -10,6 +10,8 @@ from src.ingest import connect, init_db, ingest_file, load_reference_tables
 
 from src.features import build_features
 from src.scoring import build_scores
+from src.explain import explain_flagged
+from src.llm_client import get_client
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +81,10 @@ def main(files=None):
         build_scores(conn)
         band_counts = dict(conn.execute(
             "SELECT band, COUNT(*) FROM scores GROUP BY band").fetchall())
+
+        explained = explain_flagged(conn, get_client())
+        log.info("explanations written: %d by llm, %d by fallback",
+                 explained["llm"], explained["fallback"])
 
         stats = {
             "files_loaded": files_loaded, "rows_in": rows_in,
