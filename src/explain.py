@@ -160,13 +160,9 @@ JOIN features f ON f.txn_id = s.txn_id
 JOIN clean_transactions c ON c.txn_id = s.txn_id
 LEFT JOIN explanations e ON e.txn_id = s.txn_id
 WHERE e.txn_id IS NULL
-  AND s.txn_id IN (
-      SELECT txn_id FROM scores
-      WHERE band IN ('MEDIUM', 'HIGH')
-      ORDER BY score DESC, txn_id
-      LIMIT ?
-  )
+  AND s.band IN ('MEDIUM', 'HIGH')
 ORDER BY s.score DESC, s.txn_id
+LIMIT ?
 """
 
 
