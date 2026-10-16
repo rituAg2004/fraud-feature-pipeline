@@ -11,7 +11,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Read the .env file if it exists. If it does not, nothing breaks.
 load_dotenv(BASE_DIR / ".env")
 
-DB_PATH = BASE_DIR / "data" / "pipeline.db"
+# DB_PATH = BASE_DIR / "data" / "pipeline.db"
+DB_PATH = Path(os.getenv("PIPELINE_DB", BASE_DIR / "data" / "pipeline.db"))
 SCHEMA_PATH = BASE_DIR / "sql" / "01_schema.sql"
 RULES_PATH = BASE_DIR / "config" / "rules.yaml"
 SAMPLE_DIR = BASE_DIR / "data" / "sample"
