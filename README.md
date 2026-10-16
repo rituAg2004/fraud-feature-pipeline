@@ -74,6 +74,57 @@ flowchart LR
 4. **Explain.** Only after the score is ready, the AI writes a short explanation for flagged transactions. If the AI fails or gives a wrong answer, a template explanation is used instead. The score never changes in this stage.
 5. **Report.** The final report lists the flagged transactions with their score, the rules that fired and the explanation. The report gets scores directly, so it is still produced if the AI is down.
 
+
+## Technologies used
+
+- **Python**: pipeline code
+- **SQLite**: storage and SQL window functions (velocity, previous transaction)
+- **pandas and numpy**: median, MAD, haversine distance
+- **PyYAML**: reads the rules from `config/rules.yaml`
+- **pytest**: tests
+- **requests**: HTTP call to the LLM provider
+- **python-dotenv**: reads settings from `.env`
+- **Google Gemini** (optional): writes explanations for flagged transactions
+
+## Project structure
+
+```text
+fraud-feature-pipeline/
+├── README.md
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── .gitattributes
+├── config/
+│   └── rules.yaml
+├── data/
+│   ├── reference/city_coords.csv
+│   └── sample/            transactions_day1.csv, transactions_day2.csv,
+│                          customers.csv, ground_truth.csv
+├── docs/
+│   ├── problem_analysis.md
+│   ├── architecture.md
+│   └── sample_output.md
+├── sql/
+│   ├── 01_schema.sql
+│   └── 02_features.sql
+├── src/
+│   ├── config.py          paths and rules loader
+│   ├── generate_data.py   synthetic data with fixed seed
+│   ├── ingest.py          raw load with file hash check
+│   ├── clean.py           validation, quarantine, deduplication
+│   ├── features.py        velocity, amount baseline, location change
+│   ├── scoring.py         rules to score and band
+│   ├── llm_client.py      LLM interface (gemini, none)
+│   ├── explain.py         prompt, validator, template fallback
+│   ├── report.py          flagged report and rule coverage
+│   └── run_all.py         runs the whole pipeline
+├── scripts/
+│   ├── masking_demo.py    normal z-score vs robust z-score
+│   └── demo_failure.sh    pipeline survives an LLM outage
+└── tests/                 12 tests (pytest)
+```
+
 ## Setup
 
 Requirements: Python 3.10 or newer (SQLite 3.28 or newer, which ships with Python 3.10+).
@@ -89,19 +140,17 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+The default `LLM_PROVIDER=none` needs no key: explanations then come from the template. To use Gemini, set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY` and `GEMINI_MODEL` in your local `.env`. Never commit `.env`.
+
 ## How to run
 
-Generate the sample data (optional, the CSV files are already committed):
-
-```bash
-python -m src.generate_data --seed 42 --out data/sample
-```
-
-Run the pipeline (ingest, then clean). It is safe to run again; nothing changes on a rerun:
+Run the whole pipeline (ingest, clean, features, scores, explanations, report). It is safe to run again; nothing changes on a rerun:
 
 ```bash
 python -m src.run_all
 ```
+
+The database is created at `data/pipeline.db` (override with the `PIPELINE_DB` environment variable). Reports are written to the `output/` folder.
 
 Load files one at a time to see incremental loading:
 
@@ -110,10 +159,21 @@ python -m src.run_all --files data/sample/transactions_day1.csv
 python -m src.run_all --files data/sample/transactions_day2.csv
 ```
 
-Run the tests:
+Regenerate the sample data (optional; the same seed gives identical files):
+
+```bash
+python -m src.generate_data --seed 42 --out data/sample
+```
+
+Run the tests (expected: `12 passed`):
 
 ```bash
 pytest -q
 ```
 
-Expected result today: `3 passed`.
+Demo scripts:
+
+```bash
+python scripts/masking_demo.py    # normal z-score vs robust z-score
+bash scripts/demo_failure.sh      # pipeline survives an LLM outage
+```
