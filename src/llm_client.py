@@ -76,6 +76,47 @@ class GeminiClient(LLMClient):
                 time.sleep(1)
         raise LLMUnavailable(f"Gemini failed: {last_error}")
 
+class OllamaClient(LLMClient):
+    """Provider 'ollama': calls a local Ollama server over HTTP (no key needed)."""
+
+    def __init__(self):
+        """Read the server URL and model name from environment variables."""
+        self.url = os.environ.get("OLLAMA_URL", "http://localhost:11434").strip()
+        self.model = os.environ.get("OLLAMA_MODEL", "").strip()
+        self.name = self.model or "ollama"
+
+    def generate(self, prompt: str, timeout: int = 20) -> str:
+        """Send the prompt, return text. Any problem becomes LLMUnavailable."""
+        if not self.model:
+            raise LLMUnavailable("Ollama model not set")
+
+        body = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0, "num_predict": 80},
+        }
+
+        last_error = "unknown error"
+        for attempt in (1, 2):
+            try:
+                resp = requests.post(
+                    f"{self.url}/api/generate", json=body, timeout=timeout
+                )
+                if resp.status_code != 200:
+                    last_error = f"HTTP {resp.status_code}"
+                else:
+                    text = resp.json().get("response", "").strip()
+                    if text:
+                        return text
+                    last_error = "empty answer"
+            except (requests.RequestException, ValueError) as exc:
+                last_error = type(exc).__name__
+            logger.warning("Ollama attempt %d failed: %s", attempt, last_error)
+            if attempt == 1:
+                time.sleep(1)
+        raise LLMUnavailable(f"Ollama failed: {last_error}")
+
 
 def get_client() -> LLMClient:
     """Read LLM_PROVIDER from the environment and return the matching client."""
@@ -85,4 +126,6 @@ def get_client() -> LLMClient:
         return NullClient()
     if provider == "gemini":
         return GeminiClient()
+    if provider == "ollama":
+        return OllamaClient()
     raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
