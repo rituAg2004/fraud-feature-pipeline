@@ -282,3 +282,14 @@ The labels come from our own generator, so this is a sanity check, not accuracy.
 - **Full recompute.** Features are recomputed for all rows on every run.
 - **Single machine, SQLite.**
 - **AI wording can vary**, and a free-tier provider can be slow or unavailable (HTTP 503, timeouts). The pipeline then falls back to templates.
+
+
+## What I would improve for production
+
+- Streaming ingestion and incremental feature computation instead of a full recompute.
+- A feature store, and a warehouse with date partitions (for example Postgres or BigQuery) for larger volumes.
+- Real labels, then a Random Forest or XGBoost model blended with the rules, measured by PR-AUC on a time-based split.
+- Analyst feedback loop: exclude confirmed fraud from baselines and tune thresholds from outcomes.
+- A minimum-MAD floor for the amount baseline, to reduce false positives for very consistent spenders.
+- More features: device, IP, merchant.
+- Monitoring and alerts, access control, and masking of personal fields.
