@@ -1,4 +1,9 @@
-"""Run the whole pipeline with one command: ingest, clean (more steps later)."""
+"""Run the whole pipeline with one command.
+
+Steps: ingest CSV files, clean and quarantine, build features, score,
+explain flagged rows (LLM with template fallback), write reports.
+Each run is logged in the pipeline_runs table.
+"""
 import argparse
 import logging
 from datetime import datetime, timezone

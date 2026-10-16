@@ -29,11 +29,3 @@ def load_rules(path=RULES_PATH):
 def get_llm_provider():
     """Return the LLM provider from .env: ollama, gemini or none (default)."""
     return os.getenv("LLM_PROVIDER", "none").lower()
-
-
-if __name__ == "__main__":
-    rules = load_rules()
-    print("Project root :", BASE_DIR)
-    print("Database path:", DB_PATH)
-    print("Rules version:", rules["rules_version"])
-    print("LLM provider :", get_llm_provider())

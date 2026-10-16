@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+from src.config import load_rules
+
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -66,8 +68,14 @@ def _mad(values):
     return np.nanmedian(np.abs(values - med))
 
 
-def add_amount_baseline(df, window=50, min_history=5):
-    """Add history_count, baseline_median, baseline_mad from earlier amounts only."""
+def add_amount_baseline(df, window=None, min_history=None):
+    """Add history_count, baseline_median, baseline_mad from earlier amounts only.
+
+    window and min_history default to baseline_window and min_history in rules.yaml.
+    """
+    cfg = load_rules()
+    window = window if window is not None else cfg["baseline_window"]
+    min_history = min_history if min_history is not None else cfg["min_history"]
     out = df.sort_values(["customer_id", "ts_epoch", "txn_id"]).copy()
     earlier = out.groupby("customer_id")["amount"].shift(1)
     out["_earlier"] = earlier
@@ -114,8 +122,15 @@ FEATURE_COLUMNS = [
 ]
 
 
-def build_features(conn, window=50, min_history=5):
-    """Compute all features, store them in the features table, return row count."""
+def build_features(conn, window=None, min_history=None):
+    """Compute all features, store them in the features table, return row count.
+
+    window and min_history default to baseline_window and min_history in rules.yaml.
+    """
+    cfg = load_rules()
+    window = window if window is not None else cfg["baseline_window"]
+    min_history = min_history if min_history is not None else cfg["min_history"]
+
     df = load_sql_features(conn)
     coords = pd.read_sql_query("SELECT city, lat, lon FROM city_coords", conn)
 

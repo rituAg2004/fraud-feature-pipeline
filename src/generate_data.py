@@ -353,6 +353,7 @@ def summarize(txns, customers):
 
 
 def main():
+    """Parse --seed and --out, generate all sample CSV files and print a summary."""
     parser = argparse.ArgumentParser(description="Generate synthetic transactions.")
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--out", default=str(SAMPLE_DIR))

@@ -29,6 +29,7 @@ class NullClient(LLMClient):
     name = "none"
 
     def generate(self, prompt: str, timeout: int = 20) -> str:
+        """Always raise LLMUnavailable, because this provider is switched off."""
         raise LLMUnavailable("LLM disabled")
 
 
@@ -36,6 +37,7 @@ class GeminiClient(LLMClient):
     """Provider 'gemini': calls Google's generateContent endpoint over HTTP."""
 
     def __init__(self):
+        """Read the API key and model name from environment variables (never from code)."""
         self.api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         self.model = os.environ.get("GEMINI_MODEL", "").strip()
         self.name = self.model or "gemini"
