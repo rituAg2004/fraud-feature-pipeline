@@ -27,5 +27,5 @@ def load_rules(path=RULES_PATH):
 
 
 def get_llm_provider():
-    """Return the LLM provider from .env: ollama, gemini or none (default)."""
+    """Return the LLM provider from .env: gemini or none (default)."""
     return os.getenv("LLM_PROVIDER", "none").lower()
