@@ -71,3 +71,33 @@ def test_cold_start_no_crash(conn):
         "SELECT score, band, triggered_rules FROM scores WHERE txn_id = 'T0'"
     ).fetchone()
     assert (score, band, rules) == (0, "LOW", "")
+
+
+def test_mad_zero_history(conn):
+    """Equal past amounts (MAD = 0): no crash, big amount fires, same amount does not."""
+    rows = [
+        (f"T{i}", "C2", BASE + i * 86400, 199.0, "Delhi")  # one per day
+        for i in range(6)
+    ]
+    rows.append(("T6", "C2", BASE + 6 * 86400, 5000.0, "Delhi"))
+    rows.append(("T7", "C2", BASE + 7 * 86400, 199.0, "Delhi"))
+    insert_clean(conn, rows)
+
+    build_features(conn)
+    build_scores(conn)
+
+    z6, mad6 = conn.execute(
+        "SELECT amount_robust_z, baseline_mad FROM features WHERE txn_id = 'T6'"
+    ).fetchone()
+    assert mad6 == 0
+    assert z6 > 100
+
+    rules6 = conn.execute(
+        "SELECT triggered_rules FROM scores WHERE txn_id = 'T6'"
+    ).fetchone()[0]
+    assert "UNUSUAL_AMOUNT" in rules6
+
+    rules7 = conn.execute(
+        "SELECT triggered_rules FROM scores WHERE txn_id = 'T7'"
+    ).fetchone()[0]
+    assert "UNUSUAL_AMOUNT" not in rules7
