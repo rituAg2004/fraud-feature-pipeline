@@ -20,3 +20,5 @@ rules:
 bands:
   medium: 30            # score 30 to 59 is MEDIUM
   high: 60              # score 60 and above is HIGH
+
+explain: {max_items: 50, timeout_s: 20}
