@@ -8,6 +8,9 @@ from src.clean import split_raw, load_clean
 from src.config import SAMPLE_DIR
 from src.ingest import connect, init_db, ingest_file, load_reference_tables
 
+from src.features import build_features
+from src.scoring import build_scores
+
 log = logging.getLogger(__name__)
 
 
@@ -30,19 +33,23 @@ def finish_run(conn, run_id, stats, status="SUCCESS"):
     """Fill the counts and final status for a run.
 
     stats is a dict with keys: files_loaded, rows_in, rows_clean,
-    rows_quarantined, duplicates_removed. Missing keys are stored as 0.
+    rows_quarantined, duplicates_removed, flagged_medium, flagged_high.
+    Missing keys are stored as 0.
     """
     with conn:
         conn.execute(
             "UPDATE pipeline_runs SET finished_at = ?, status = ?, "
             "files_loaded = ?, rows_in = ?, rows_clean = ?, "
-            "rows_quarantined = ?, duplicates_removed = ? "
+            "rows_quarantined = ?, duplicates_removed = ?, "
+            "flagged_medium = ?, flagged_high = ? "
             "WHERE run_id = ?",
             (
                 now_utc(), status,
                 stats.get("files_loaded", 0), stats.get("rows_in", 0),
                 stats.get("rows_clean", 0), stats.get("rows_quarantined", 0),
-                stats.get("duplicates_removed", 0), run_id,
+                stats.get("duplicates_removed", 0),
+                stats.get("flagged_medium", 0), stats.get("flagged_high", 0),
+                run_id,
             ),
         )
 
@@ -68,10 +75,17 @@ def main(files=None):
         rows_clean = conn.execute(
             "SELECT COUNT(*) FROM clean_transactions").fetchone()[0]
 
+        build_features(conn)
+        build_scores(conn)
+        band_counts = dict(conn.execute(
+            "SELECT band, COUNT(*) FROM scores GROUP BY band").fetchall())
+
         stats = {
             "files_loaded": files_loaded, "rows_in": rows_in,
             "rows_clean": rows_clean, "rows_quarantined": len(invalid),
             "duplicates_removed": dups,
+            "flagged_medium": band_counts.get("MEDIUM", 0),
+            "flagged_high": band_counts.get("HIGH", 0),
         }
         finish_run(conn, run_id, stats)
         log.info("run %d SUCCESS: %s", run_id, stats)
