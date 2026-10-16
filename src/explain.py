@@ -159,9 +159,14 @@ FROM scores s
 JOIN features f ON f.txn_id = s.txn_id
 JOIN clean_transactions c ON c.txn_id = s.txn_id
 LEFT JOIN explanations e ON e.txn_id = s.txn_id
-WHERE s.band IN ('MEDIUM', 'HIGH') AND e.txn_id IS NULL
+WHERE e.txn_id IS NULL
+  AND s.txn_id IN (
+      SELECT txn_id FROM scores
+      WHERE band IN ('MEDIUM', 'HIGH')
+      ORDER BY score DESC, txn_id
+      LIMIT ?
+  )
 ORDER BY s.score DESC, s.txn_id
-LIMIT ?
 """
 
 
@@ -174,18 +179,26 @@ def explain_flagged(conn, client, cfg=None) -> dict:
     rows = pd.read_sql_query(FLAGGED_SQL, conn, params=(max_items,)).to_dict("records")
     known_cities = [r[0] for r in conn.execute("SELECT city FROM city_coords")]
 
+    max_fail = cfg["explain"]["max_consecutive_failures"]
+    fail_streak = 0
     counts = {"llm": 0, "fallback": 0}
     for row in rows:
         text, source, model = None, "fallback", "template"
-        try:
-            answer = client.generate(build_prompt(row, cfg), timeout=timeout)
-            ok, reason = validate_explanation(answer, row, cfg, known_cities)
-            if ok:
-                text, source, model = answer.strip(), "llm", client.name
-            else:
-                logger.warning("AI answer rejected for %s: %s", row["txn_id"], reason)
-        except LLMUnavailable as exc:
-            logger.warning("LLM unavailable for %s: %s", row["txn_id"], exc)
+        if fail_streak < max_fail:
+            try:
+                answer = client.generate(build_prompt(row, cfg), timeout=timeout)
+                fail_streak = 0  # LLM answered, even if validator rejects it
+                ok, reason = validate_explanation(answer, row, cfg, known_cities)
+                if ok:
+                    text, source, model = answer.strip(), "llm", client.name
+                else:
+                    logger.warning("AI answer rejected for %s: %s", row["txn_id"], reason)
+            except LLMUnavailable as exc:
+                fail_streak += 1
+                logger.warning("LLM unavailable for %s: %s", row["txn_id"], exc)
+                if fail_streak == max_fail:
+                    logger.warning("LLM failed %d times in a row; using template for the rest",
+                                   max_fail)
 
         if text is None:
             text = template_explanation(row, cfg)
