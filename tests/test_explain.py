@@ -1,6 +1,8 @@
 """Tests for the AI explanation layer: validator, fallback and outage handling."""
 from src.explain import explain_flagged
 from src.llm_client import LLMClient, LLMUnavailable
+import sqlite3
+from tests.conftest import SCHEMA_PATH
 
 
 class FakeClient(LLMClient):
@@ -89,3 +91,35 @@ def test_correct_ai_answer_is_accepted(conn):
     assert source == "llm"
     assert model == "fake"
     assert text == good
+
+def make_db():
+    """Fresh in-memory database with the schema and one flagged transaction."""
+    db = sqlite3.connect(":memory:")
+    db.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    seed_flagged_txn(db)
+    return db
+
+
+def test_pipeline_survives_llm_outage():
+    """T9: with the LLM down, explanations fall back and scores stay identical."""
+    good = ("Amount 48,000 is far above this customer's usual 1,950; "
+            "previous transaction was in Delhi 20 minutes earlier, "
+            "about 1,150 km away.")
+    db_ok, db_down = make_db(), make_db()
+
+    explain_flagged(db_ok, FakeClient(good))
+    counts_down = explain_flagged(db_down, DownClient())
+
+    sources_ok = db_ok.execute("SELECT source FROM explanations").fetchall()
+    sources_down = db_down.execute("SELECT source FROM explanations").fetchall()
+    scores_ok = db_ok.execute("SELECT * FROM scores ORDER BY txn_id").fetchall()
+    scores_down = db_down.execute("SELECT * FROM scores ORDER BY txn_id").fetchall()
+
+    assert sources_ok == [("llm",)]
+    assert sources_down == [("fallback",)]
+    assert counts_down == {"llm": 0, "fallback": 1}
+    assert scores_ok == scores_down
+    assert len(scores_down) == 1
+
+    db_ok.close()
+    db_down.close()
