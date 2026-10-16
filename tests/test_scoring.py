@@ -1,6 +1,7 @@
 """Tests for rule scoring."""
 from src.features import build_features
-from src.scoring import build_scores
+from src.config import load_rules
+from src.scoring import band_for, build_scores, score_row
 from tests.test_features import insert_clean, BASE
 
 
@@ -31,3 +32,24 @@ def test_impossible_travel(conn):
         "SELECT speed_kmh FROM features WHERE txn_id = 'B1'"
     ).fetchone()[0]
     assert 100 < speed_b < 130
+
+def test_two_rules_together_give_high():
+    """Impossible travel plus unusual amount adds up to 70 points, band HIGH."""
+    cfg = load_rules()
+    row = {
+        "txn_count_1h": 1,
+        "history_count": 10,
+        "amount_robust_z": 77.7,
+        "distance_km": 1150.0,
+        "speed_kmh": 3450.0,
+    }
+    points, fired = score_row(row, cfg)
+    assert points == 70
+    assert set(fired) == {"IMPOSSIBLE_TRAVEL", "UNUSUAL_AMOUNT"}
+    assert band_for(points, cfg) == "HIGH"
+
+    # one rule alone stays MEDIUM
+    row["amount_robust_z"] = 0.5
+    points, fired = score_row(row, cfg)
+    assert points == 40
+    assert band_for(points, cfg) == "MEDIUM"
