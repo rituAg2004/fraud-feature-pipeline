@@ -1,4 +1,5 @@
 # Fraud Feature Pipeline (DAI-023)
+**Demo video:** <link>
 
 A pipeline that turns synthetic card transactions into fraud features (velocity, unusual amount, location change) and a rule-based risk score, with AI-written explanations for flagged transactions.
 
@@ -15,6 +16,8 @@ Fraud analysts need to know which card transactions deserve a closer look, and w
 - **AI only explains.** For MEDIUM and HIGH transactions, an LLM writes a short explanation from the computed facts. It never changes a score. If the LLM is down or its answer contains a number or city that is not in the facts, a template explanation is used instead.
 - **Robust z-score for amounts.** The baseline uses median and MAD of the customer's earlier amounts, because one big purchase would distort mean and standard deviation and hide later fraud.
 - **Safe reruns.** Files are skipped by hash, clean rows use `INSERT OR IGNORE`, features and scores use `INSERT OR REPLACE`.
+
+For the reasoning behind these choices, see [`docs/design_note.md`](docs/design_note.md).
 
 | Rules (deterministic) | AI (optional last layer) |
 |---|---|
@@ -104,6 +107,7 @@ fraud-feature-pipeline/
 ├── docs/
 │   ├── problem_analysis.md
 │   ├── architecture.md
+│   ├── design_note.md
 │   └── sample_output.md
 ├── sql/
 │   ├── 01_schema.sql
@@ -293,3 +297,16 @@ The labels come from our own generator, so this is a sanity check, not accuracy.
 - A minimum-MAD floor for the amount baseline, to reduce false positives for very consistent spenders.
 - More features: device, IP, merchant.
 - Monitoring and alerts, access control, and masking of personal fields.
+
+
+## Demo walkthrough
+
+Commands to run, in order:
+
+1. Show `docs/architecture.md` (the diagram and the rules-versus-AI table).
+2. `rm -f data/pipeline.db` then `python -m src.run_all` (clean data, quarantine, scores, report).
+3. Show the top flagged transactions: `head -n 6 output/flagged_report.csv`.
+4. `python scripts/masking_demo.py` (normal z-score vs robust z-score).
+5. `pytest -q` (12 passed).
+6. `bash scripts/demo_failure.sh` (LLM outage: pipeline finishes, scores identical).
+7. Limitations: no HIGH on sample data, small-MAD false positives, straight-line distance.
