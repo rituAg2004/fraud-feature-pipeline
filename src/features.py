@@ -56,3 +56,30 @@ def add_location_features(df, coords):
     out["speed_kmh"] = out["distance_km"] / (minutes / 60)
 
     return out.drop(columns=["lat", "lon", "prev_lat", "prev_lon"])
+
+def _mad(values):
+    """Median absolute deviation of a 1-D array, ignoring NaN."""
+    med = np.nanmedian(values)
+    return np.nanmedian(np.abs(values - med))
+
+
+def add_amount_baseline(df, window=50, min_history=5):
+    """Add history_count, baseline_median, baseline_mad from earlier amounts only."""
+    out = df.sort_values(["customer_id", "ts_epoch", "txn_id"]).copy()
+    earlier = out.groupby("customer_id")["amount"].shift(1)
+    out["_earlier"] = earlier
+
+    grouped = out.groupby("customer_id")["_earlier"]
+    out["history_count"] = (
+        grouped.rolling(window, min_periods=1).count().reset_index(level=0, drop=True)
+    )
+    out["baseline_median"] = (
+        grouped.rolling(window, min_periods=min_history).median().reset_index(level=0, drop=True)
+    )
+    out["baseline_mad"] = (
+        grouped.rolling(window, min_periods=min_history)
+        .apply(_mad, raw=True)
+        .reset_index(level=0, drop=True)
+    )
+    out["history_count"] = out["history_count"].fillna(0).astype(int)
+    return out.drop(columns=["_earlier"]).sort_index()
